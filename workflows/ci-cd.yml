@@ -1,0 +1,82 @@
+name: Build & Deploy to Yandex MKS
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+env:
+  YC_FOLDER_ID: b1g35vjdqoa8lovnn8f6
+  YC_REGISTRY: cr.yandex/${{ vars.YC_FOLDER_ID }}/seorank
+  KUBE_NAMESPACE: seorank
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Yandex Cloud CLI
+        run: |
+          curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -n
+          echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
+
+      - name: Authenticate with Yandex Cloud
+        run: |
+          yc config set folder-id $YC_FOLDER_ID
+          yc iam create-token --jwt --service-account-id ${{ secrets.YC_SERVICE_ACCOUNT_ID }} > ~/.config/yandex-cloud/token
+          yc config set token "$(cat ~/.config/yandex-cloud/token)"
+
+      - name: Build and Push Docker image
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          yc container registry configure-docker
+          docker build -t $YC_REGISTRY:$IMAGE_TAG .
+          docker push $YC_REGISTRY:$IMAGE_TAG
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: Generate Kubernetes Secrets
+        run: |
+          mkdir -p k8s-generated
+          cat <<EOF > k8s-generated/app-secrets.yaml
+          apiVersion: v1
+          kind: Secret
+          meta
+            name: app-secrets
+            namespace: $KUBE_NAMESPACE
+          type: Opaque
+          stringData:
+            SECRET_KEY: "${{ secrets.SECRET_KEY }}"
+            YANDEX_API_KEY: "${{ secrets.YANDEX_API_KEY }}"
+            YANDEX_FOLDER_ID: "${{ secrets.YANDEX_FOLDER_ID }}"
+          EOF
+
+      - name: Update deployment image
+        run: |
+          sed -i "s|image: .*|image: $YC_REGISTRY:${{ env.IMAGE_TAG }}|g" k8s/app-deployment.yaml
+
+      - name: Configure kubectl
+        run: |
+          yc k8s cluster get-credentials ${{ secrets.YC_MKS_CLUSTER_ID }} --external
+          kubectl config set-context --current --namespace=$KUBE_NAMESPACE
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s-generated/app-secrets.yaml
+          kubectl apply -f k8s/redis-deployment.yaml
+          kubectl apply -f k8s/postgres-secret.yaml
+          kubectl apply -f k8s/app-deployment.yaml
+          kubectl apply -f k8s/celery-deployment.yaml
+          kubectl apply -f k8s/app-service.yaml
+          kubectl apply -f k8s/ingress.yaml
+
+      - name: Verify deployment
+        run: |
+          kubectl rollout status deployment/seorank-web --timeout=300s
+          kubectl rollout status deployment/seorank-celery --timeout=120s
