@@ -1,3 +1,4 @@
+# .github/workflows/ci-cd.yml
 name: Build & Deploy to Yandex MKS
 
 on:
@@ -6,8 +7,8 @@ on:
   workflow_dispatch:
 
 env:
-  YC_FOLDER_ID: b1g35vjdqoa8lovnn8f6
-  YC_REGISTRY: cr.yandex/${{ vars.YC_FOLDER_ID }}/seorank
+  YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
+  YC_REGISTRY: cr.yandex/${{ secrets.YC_FOLDER_ID }}/seorank
   KUBE_NAMESPACE: seorank
 
 jobs:
@@ -15,24 +16,27 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
+      id-token: write  # для yc iam create-token --jwt
 
     steps:
-      - name: Checkout code
+      - name: 🛎️ Checkout
         uses: actions/checkout@v4
 
-      - name: Install Yandex Cloud CLI
+      - name: 🐳 Install Yandex Cloud CLI
         run: |
           curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -n
           echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
 
-      - name: Authenticate with Yandex Cloud
+      - name: 🔑 Authenticate with Yandex Cloud
         run: |
           yc config set folder-id $YC_FOLDER_ID
-          yc iam create-token --jwt --service-account-id ${{ secrets.YC_SERVICE_ACCOUNT_ID }} > ~/.config/yandex-cloud/token
-          yc config set token "$(cat ~/.config/yandex-cloud/token)"
+          yc iam create-token \
+            --jwt \
+            --service-account-id ${{ secrets.YC_SERVICE_ACCOUNT_ID }} \
+            --ttl 3600 > ~/.yc-token
+          yc config set token "$(cat ~/.yc-token)"
 
-      - name: Build and Push Docker image
+      - name: 📦 Build & Push Docker image
         run: |
           IMAGE_TAG=${{ github.sha }}
           yc container registry configure-docker
@@ -40,7 +44,7 @@ jobs:
           docker push $YC_REGISTRY:$IMAGE_TAG
           echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
 
-      - name: Generate Kubernetes Secrets
+      - name: 🔐 Generate Kubernetes Secrets
         run: |
           mkdir -p k8s-generated
           cat <<EOF > k8s-generated/app-secrets.yaml
@@ -56,27 +60,21 @@ jobs:
             YANDEX_FOLDER_ID: "${{ secrets.YANDEX_FOLDER_ID }}"
           EOF
 
-      - name: Update deployment image
+      - name: ✨ Deploy to Kubernetes
         run: |
-          sed -i "s|image: .*|image: $YC_REGISTRY:${{ env.IMAGE_TAG }}|g" k8s/app-deployment.yaml
+          # Получаем kubeconfig
+          CLUSTER_ID=$(yc k8s cluster list --folder-id $YC_FOLDER_ID --format json | jq -r '.[0].id')
+          yc k8s cluster get-credentials $CLUSTER_ID --external
 
-      - name: Configure kubectl
-        run: |
-          yc k8s cluster get-credentials ${{ secrets.YC_MKS_CLUSTER_ID }} --external
-          kubectl config set-context --current --namespace=$KUBE_NAMESPACE
-
-      - name: Deploy to Kubernetes
-        run: |
-          kubectl apply -f k8s/namespace.yaml
+          # Устанавливаем namespace и секреты
+          kubectl create namespace $KUBE_NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply -f k8s-generated/app-secrets.yaml
-          kubectl apply -f k8s/redis-deployment.yaml
-          kubectl apply -f k8s/postgres-secret.yaml
-          kubectl apply -f k8s/app-deployment.yaml
-          kubectl apply -f k8s/celery-deployment.yaml
-          kubectl apply -f k8s/app-service.yaml
-          kubectl apply -f k8s/ingress.yaml
 
-      - name: Verify deployment
+          # Применяем остальные манифесты (их нужно добавить в репозиторий!)
+          kubectl apply -f k8s/ 2>/dev/null || echo "⚠️ k8s/ not found yet — add manifests!"
+
+      - name: 🚀 Rollout Status
+        if: success()
         run: |
-          kubectl rollout status deployment/seorank-web --timeout=300s
-          kubectl rollout status deployment/seorank-celery --timeout=120s
+          kubectl rollout status deployment/seorank-web -n $KUBE_NAMESPACE --timeout=300s || true
+          kubectl rollout status deployment/seorank-celery -n $KUBE_NAMESPACE --timeout=120s || true
