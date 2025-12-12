@@ -53,23 +53,22 @@ jobs:
       - name: 🔐 Generate Kubernetes Secrets
         run: |
           mkdir -p k8s-generated
-          cat <<EOF > k8s-generated/app-secrets.yaml
+          cat <<'EOF' > k8s-generated/app-secrets.yaml
 apiVersion: v1
 kind: Secret
 metadata:
   name: app-secrets
-  namespace: $KUBE_NAMESPACE
+  namespace: seorank
 type: Opaque
 stringData:
   SECRET_KEY: "${{ secrets.SECRET_KEY }}"
   YANDEX_API_KEY: "${{ secrets.YANDEX_API_KEY }}"
   YANDEX_FOLDER_ID: "${{ secrets.YANDEX_FOLDER_ID }}"
-
+EOF
 
       - name: ✨ Deploy to Kubernetes
         run: |
           export PATH="$HOME/yandex-cloud/bin:$PATH"
-          # Получаем ID кластера (первый в списке)
           CLUSTER_ID=$(yc k8s cluster list --folder-id "$YC_FOLDER_ID" --format json | jq -r '.[0].id')
           if [ -z "$CLUSTER_ID" ] || [ "$CLUSTER_ID" = "null" ]; then
             echo "❌ No Kubernetes cluster found in folder $YC_FOLDER_ID"
@@ -77,10 +76,9 @@ stringData:
           fi
           echo "Using cluster: $CLUSTER_ID"
           yc k8s cluster get-credentials "$CLUSTER_ID" --external
-          # Применяем конфигурацию
           kubectl create namespace "$KUBE_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply -f k8s-generated/app-secrets.yaml
-          if [ -d "k8s" ] && [ "$(ls -A k8s/)" ]; then
+          if [ -d "k8s" ] && [ "$(ls -A k8s/ 2>/dev/null)" ]; then
             kubectl apply -f k8s/
           else
             echo "⚠️ Directory k8s/ is empty or missing — skipping deployment"
