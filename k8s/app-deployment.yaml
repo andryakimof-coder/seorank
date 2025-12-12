@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seorank-web
+  namespace: seorank
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: seorank-web
+  template:
+    meta
+      labels:
+        app: seorank-web
+    spec:
+      containers:
+        - name: web
+          image: cr.yandex/b1g35vjdqoa8lovnn8f6/seorank:PLACEHOLDER
+          ports:
+            - containerPort: 5000
+          envFrom:
+            - secretRef:
+                name: app-secrets
+            - secretRef:
+                name: postgres-credentials
+          env:
+            - name: REDIS_URL
+              value: "redis://redis:6379/0"
+            - name: DATABASE_URL
+              value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)"
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 60
