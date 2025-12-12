@@ -360,7 +360,7 @@ def guest_report(token):
         const ctx = document.getElementById('chart').getContext('2d');
         new Chart(ctx, {
           type: 'line',
-          data: {{ chart_data | tojson(indent=2) }},
+           {{ chart_data | tojson(indent=2) }},
           options: {
             responsive: true,
             plugins: { legend: { position: 'top' } },
