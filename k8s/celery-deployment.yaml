@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seorank-celery
+  namespace: seorank
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: seorank-celery
+  template:
+    metadata:
+      labels:
+        app: seorank-celery
+    spec:
+      containers:
+        - name: celery
+          image: cr.yandex/b1g35vjdqoa8lovnn8f6/seorank:PLACEHOLDER
+          command: ["celery", "-A", "celery_worker.celery_app", "worker", "--loglevel=info"]
+          envFrom:
+            - secretRef:
+                name: app-secrets
+            - secretRef:
+                name: postgres-credentials
+          env:
+            - name: REDIS_URL
+              value: "redis://redis:6379/0"
