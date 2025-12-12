@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+meta
+  name: seorank-web
+  namespace: seorank
+spec:
+  selector:
+    app: seorank-web
+  ports:
+    - port: 80
+      targetPort: 5000
