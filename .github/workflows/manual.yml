@@ -8,6 +8,8 @@ on:
 
 env:
   YC_FOLDER_ID: ${{ secrets.YC_FOLDER_ID }}
+  YC_CLOUD_ID: ${{ secrets.YC_CLOUD_ID }}
+  YC_SERVICE_ACCOUNT_ID: ${{ secrets.YC_SERVICE_ACCOUNT_ID }}
   YC_REGISTRY: cr.yandex/${{ secrets.YC_FOLDER_ID }}/seorank
   KUBE_NAMESPACE: seorank
 
@@ -19,19 +21,74 @@ jobs:
       id-token: write
 
     steps:
-      - name: 🛎️ Checkout
+      - name: 🛎️ Checkout code
         uses: actions/checkout@v4
 
-      - name: 🐳 Install Yandex Cloud CLI
+      - name: 🔄 Install latest Yandex Cloud CLI
         run: |
           curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -n
           echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
+          export PATH="$HOME/yandex-cloud/bin:$PATH"
+          yc --version
 
       - name: 🔑 Authenticate with Yandex Cloud
         run: |
-          # Совместимость со старыми/новыми версиями yc
-          yc config set folderid "$YC_FOLDER_ID" || yc config set folder-id "$YC_FOLDER_ID"
-          yc config set cloudid "${{ secrets.YC_CLOUD_ID }}" || yc config set cloud-id "${{ secrets.YC_CLOUD_ID }}"
+          export PATH="$HOME/yandex-cloud/bin:$PATH"
+          yc config set folder-id "$YC_FOLDER_ID"
+          yc config set cloud-id "$YC_CLOUD_ID"
           yc iam create-token \
-            --jwt \
-            --service-account-id "${{ secrets.YC_SERVICE_ACCOUNT_ID }}"
+            --service-account-id "$YC_SERVICE_ACCOUNT_ID" \
+            --lifetime 3600 > ~/.yc-token
+          yc config set iam-token "$(cat ~/.yc-token)"
+
+      - name: 📦 Build and Push Docker image
+        run: |
+          export PATH="$HOME/yandex-cloud/bin:$PATH"
+          IMAGE_TAG=${{ github.sha }}
+          yc container registry configure-docker
+          docker build -t "$YC_REGISTRY:$IMAGE_TAG" .
+          docker push "$YC_REGISTRY:$IMAGE_TAG"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_ENV
+
+      - name: 🔐 Generate Kubernetes Secrets
+        run: |
+          mkdir -p k8s-generated
+          cat <<EOF > k8s-generated/app-secrets.yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: app-secrets
+  namespace: $KUBE_NAMESPACE
+type: Opaque
+stringData:
+  SECRET_KEY: "${{ secrets.SECRET_KEY }}"
+  YANDEX_API_KEY: "${{ secrets.YANDEX_API_KEY }}"
+  YANDEX_FOLDER_ID: "${{ secrets.YANDEX_FOLDER_ID }}"
+EOF
+
+      - name: ✨ Deploy to Kubernetes
+        run: |
+          export PATH="$HOME/yandex-cloud/bin:$PATH"
+          # Получаем ID кластера (первый в списке)
+          CLUSTER_ID=$(yc k8s cluster list --folder-id "$YC_FOLDER_ID" --format json | jq -r '.[0].id')
+          if [ -z "$CLUSTER_ID" ] || [ "$CLUSTER_ID" = "null" ]; then
+            echo "❌ No Kubernetes cluster found in folder $YC_FOLDER_ID"
+            exit 1
+          fi
+          echo "Using cluster: $CLUSTER_ID"
+          yc k8s cluster get-credentials "$CLUSTER_ID" --external
+          # Применяем конфигурацию
+          kubectl create namespace "$KUBE_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+          kubectl apply -f k8s-generated/app-secrets.yaml
+          if [ -d "k8s" ] && [ "$(ls -A k8s/)" ]; then
+            kubectl apply -f k8s/
+          else
+            echo "⚠️ Directory k8s/ is empty or missing — skipping deployment"
+          fi
+
+      - name: 🚀 Verify Rollout
+        if: success()
+        run: |
+          export PATH="$HOME/yandex-cloud/bin:$PATH"
+          kubectl rollout status deployment/seorank-web -n "$KUBE_NAMESPACE" --timeout=300s || true
+          kubectl rollout status deployment/seorank-celery -n "$KUBE_NAMESPACE" --timeout=120s || true
