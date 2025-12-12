@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+meta
+  name: redis
+  namespace: seorank
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+---
+apiVersion: v1
+kind: Service
+meta
+  name: redis
+  namespace: seorank
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
+      targetPort: 6379
