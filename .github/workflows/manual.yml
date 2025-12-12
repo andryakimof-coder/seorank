@@ -27,14 +27,13 @@ jobs:
           curl -sSL https://storage.yandexcloud.net/yandexcloud-yc/install.sh | bash -s -- -n
           echo "$HOME/yandex-cloud/bin" >> $GITHUB_PATH
 
-      - name: 🔑 Authenticate with Yandex Cloud
-        run: |
-          yc config set folder-id $YC_FOLDER_ID
-          yc iam create-token \
-            --jwt \
-            --service-account-id ${{ secrets.YC_SERVICE_ACCOUNT_ID }} \
-            --ttl 3600 > ~/.yc-token
-          yc config set token "$(cat ~/.yc-token)"
+     - name: 🔑 Authenticate with Yandex Cloud
+  run: |
+    # Совместимость со старыми и новыми версиями yc
+    yc config set folderid $YC_FOLDER_ID || yc config set folder-id $YC_FOLDER_ID
+    yc config set cloudid ${{ secrets.YC_CLOUD_ID }} || yc config set cloud-id ${{ secrets.YC_CLOUD_ID }}
+    yc iam create-token --jwt --service-account-id ${{ secrets.YC_SERVICE_ACCOUNT_ID }} --ttl 3600 > ~/.yc-token
+    yc config set token "$(cat ~/.yc-token)" || yc config set iam-token "$(cat ~/.yc-token)"
 
       - name: 📦 Build & Push Docker image
         run: |
