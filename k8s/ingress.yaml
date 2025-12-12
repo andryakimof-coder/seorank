@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+meta
+  name: seorank-ingress
+  namespace: seorank
+  annotations:
+    kubernetes.io/ingress.class: "nginx"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  tls:
+    - hosts:
+        - ranks.example.com
+      secretName: seorank-tls
+  rules:
+    - host: ranks.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: seorank-web
+                port:
+                  number: 80
